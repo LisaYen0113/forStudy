@@ -33,7 +33,8 @@
 
 ### 3.1 範圍內
 
-- Email 魔法連結登入（Supabase Auth）
+- Email + 密碼登入（Supabase Auth），關閉信箱驗證以避開寄信速率限制
+- 部署至 Vercel，透過環境變數連接 Supabase
 - 上傳課表截圖 → 瀏覽器本地 OCR → 可編輯的候選課程表格 → 確認匯入
 - 內建課表範本可一鍵載入（OCR 失敗時的保底）。公開版為虛構假資料，真實課表存於本機未進版控的檔案，詳見 §6.2
 - 節次制週曆（縱軸 `D1~D8` + `E0~E4` 共 13 列，橫軸週一至週日）
@@ -81,8 +82,8 @@
 
 ### 5.1 首次使用
 
-1. 開啟網頁 → 顯示登入頁 → 輸入 email
-2. 收信點擊魔法連結 → 回到網頁，已登入
+1. 開啟網頁 → 顯示登入頁 → 切到「註冊」→ 輸入 email 與密碼
+2. 註冊完成立即登入（**不寄驗證信**，見 §6.1）
 3. 系統自動為此帳號建立 `settings` 資料列
 4. 畫面提示「尚未有課表」→ 兩個選項：
    - **上傳課表截圖**（進入 5.2）
@@ -118,11 +119,33 @@
 
 ### 6.1 登入
 
-- Email 魔法連結（Supabase Auth `signInWithOtp`）
-- 未登入時顯示登入頁，其餘路由一律重導向登入頁
+採 Email + 密碼，**不使用**魔法連結。
+
+**為何不用魔法連結**：Supabase 內建寄信服務限制為**每小時 2 封**（見 [Supabase 速率限制文件](https://supabase.com/docs/guides/auth/rate-limits)），開發測試期極易卡住。改用密碼登入後，登入完全不寄信。
+
+**必須關閉信箱驗證**：Supabase 預設註冊時要求點擊驗證信，同樣會消耗寄信額度。設定路徑 `Authentication → Sign In / Providers → Email → Confirm email` 關閉。關閉後註冊即完成登入，全程不寄任何信。
+
+| 流程 | Supabase API | 是否寄信 |
+|---|---|---|
+| 註冊 | `signUp({ email, password })` | 否（已關閉驗證） |
+| 登入 | `signInWithPassword({ email, password })` | 否 |
+| 登出 | `signOut()` | 否 |
+| 忘記密碼 | `resetPasswordForEmail(email)` | **是**（罕用，2 封/小時足夠） |
+| 重設密碼 | `updateUser({ password })` | 否 |
+
+**規格**
+
+- 登入頁含三個模式：登入 / 註冊 / 忘記密碼，以頁籤切換
+- 密碼規則：至少 8 字元，需含英文與數字。註冊時即時顯示規則檢查結果
+- 密碼輸入框提供顯示／隱藏切換
+- 錯誤訊息對應：`Invalid login credentials` → 「Email 或密碼錯誤」；`User already registered` → 「這個 Email 已經註冊過」
+- 註冊成功 → 直接進入主畫面，顯示一次性提示「帳號已建立」
+- 未登入時顯示登入頁，其餘畫面一律重導向登入頁
 - 登入狀態由 `supabase.auth.onAuthStateChange` 驅動
 - 登出按鈕置於設定頁
-- 登入頁顯示明確狀態：「已寄出，請至信箱點擊連結」，含重新寄送（60 秒冷卻）
+- 忘記密碼送出後顯示「已寄出重設信，請至信箱收信」，含 60 秒冷卻
+
+**安全性**：Supabase 內建 bcrypt 雜湊儲存密碼，前端不接觸雜湊值。密碼永不放進 localStorage 或任何前端狀態儲存，登入後僅保存 Supabase 簽發的 JWT session。
 
 ### 6.2 課表匯入
 
@@ -554,6 +577,7 @@ forStudy/
 ├─ tsconfig.json
 ├─ .env.example                  # 只有變數名稱，值留空
 ├─ .gitignore
+├─ vercel.json                   # SPA rewrite + 建置設定
 ├─ README.md                     # 環境設定逐步指南
 ├─ docs/superpowers/specs/
 │  └─ 2026-09-19-study-planner-design.md
@@ -589,7 +613,7 @@ forStudy/
    │  ├─ useCompletions.ts
    │  └─ useSettings.ts
    ├─ features/
-   │  ├─ auth/          LoginPage.tsx
+   │  ├─ auth/          LoginPage.tsx / AuthTabs.tsx / ForgotPasswordForm.tsx
    │  ├─ schedule/      WeeklyBoard.tsx / BoardCell.tsx / CourseBlock.tsx
    │  │                 TaskBlock.tsx / AssignPopover.tsx / WeekNav.tsx
    │  ├─ progress/      ProgressPanel.tsx / ProgressChip.tsx
@@ -632,24 +656,81 @@ forStudy/
 | XSS 防護 | React 預設轉義；**禁止使用 `dangerouslySetInnerHTML`**；OCR 取得的文字一律視為純文字顯示 |
 | 授權驗證 | 五張表全開 RLS，policy 皆為 `auth.uid() = user_id`；前端不放置 `service_role` key |
 | 錯誤訊息 | `lib/env.ts` 缺變數時只說「缺少 VITE_SUPABASE_URL」，不輸出任何金鑰內容；資料庫錯誤統一轉為使用者可讀訊息 |
-| 速率限制 | 魔法連結寄送按鈕 60 秒冷卻；Supabase 內建 SMTP 本身有速率限制 |
+| 速率限制 | 登入與註冊完全不寄信，不受寄信額度（2 封/小時）影響；忘記密碼按鈕 60 秒冷卻；Supabase 另有登入嘗試次數限制 |
 | 個人資料 | 課表截圖檔名加入 `.gitignore`，不進版控 |
 
 **關於 anon key 的說明**：Vite 會把 `VITE_` 開頭的變數打包進前端 bundle，這是預期行為。Supabase 的 anon key 設計上就是公開的，真正的存取控制由 RLS 負責，因此不能因為「前端看得到」而誤認為外洩。真正**絕不可**放進前端的只有 `service_role` key。
 
 ## 12. 一次性環境設定
 
-這部分需要你本人操作（我無法代為註冊帳號）。步驟會寫進 `README.md`：
+這部分需要你本人操作（我無法代為註冊帳號）。完整步驟會寫進 `README.md`，此處列出綱要。
 
-1. 至 supabase.com 註冊並建立新專案（記下資料庫密碼）
-2. 進入 SQL Editor，執行 `supabase/migrations/0001_init.sql` 全文
-3. `Authentication → Providers → Email`：確認啟用
+### 12.1 Supabase（你已完成註冊）
+
+1. 建立新專案，記下資料庫密碼與 Region
+2. `SQL Editor` → 貼上並執行 `supabase/migrations/0001_init.sql` 全文
+3. **`Authentication → Sign In / Providers → Email`**：
+   - 確認 Email provider 為啟用
+   - **關閉 `Confirm email`**（關鍵：否則註冊要收信，會撞上 2 封/小時的限制）
+   - 密碼最短長度設為 8
 4. `Authentication → URL Configuration`：
-   - Site URL 填 `http://localhost:5173`
-   - Redirect URLs 加入 `http://localhost:5173/**`
+   - `Site URL`：本機開發時填 `http://localhost:5173`；部署後改填 Vercel 網址
+   - `Redirect URLs`：加入 `http://localhost:5173/**` 與 `https://<你的專案>.vercel.app/**`
+   - （僅「忘記密碼」的重設連結會用到此設定）
 5. `Project Settings → API`：複製 `Project URL` 與 `anon public` key
-6. 複製 `.env.example` 為 `.env.local`，填入上述兩個值
-7. `npm install` → `npm run dev`
+
+### 12.2 本機開發
+
+6. 複製 `.env.example` 為 `.env.local`，填入步驟 5 的兩個值
+7. `npm install` → `npm run dev` → 開 `http://localhost:5173`
+8. 首次使用：註冊帳號 → 匯入課表（或載入範本）→ 排事項
+
+### 12.3 Vercel 部署
+
+9. 至 vercel.com 以 GitHub 帳號登入（可直接沿用 `LisaYen0113`）
+10. `Add New → Project` → 匯入 `forStudy` repo
+11. Framework Preset 會自動偵測為 **Vite**；確認：
+    - Build Command：`npm run build`
+    - Output Directory：`dist`
+    - Install Command：`npm install`
+12. **`Environment Variables`** 加入與 `.env.local` 相同的兩組值：
+    - `VITE_SUPABASE_URL`
+    - `VITE_SUPABASE_ANON_KEY`
+    - 環境勾選 Production / Preview / Development 全選
+13. `Deploy` → 取得 `https://<專案>.vercel.app`
+14. 回到 Supabase 步驟 4，把 Vercel 網址補進 `Site URL` 與 `Redirect URLs`
+
+之後每次 `git push` 到 `main`，Vercel 會自動重新建置部署。
+
+**`vercel.json`**（置於專案根目錄）：
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
+```
+
+`rewrites` 確保前端路由（若日後加入）在直接輸入網址時不會 404。
+
+### 12.4 部署與隱私的關係
+
+- **Vercel 網址是公開的**，任何人打開只會看到登入頁
+- 所有資料受登入與 RLS 保護，未登入者無法讀取任何一列
+- **Vercel 從 GitHub 建置，因此建置出的版本用的是假範本資料** — 這是正確的：真實課表只在你本機匯入一次，之後存進 Supabase，部署版讀 Supabase 就看到了
+- `courseTemplate.local.ts` 不存在於 GitHub，所以 Vercel 上的人（包括未來的你）只會拿到假範本
+
+### 12.5 備案：自訂 SMTP
+
+若日後「忘記密碼」也嫌不夠用（或想開啟信箱驗證），可接 Resend：
+
+1. resend.com 註冊（免費 3000 封/月）
+2. 建立 API Key，驗證寄件網域（或先用測試網域）
+3. Supabase `Project Settings → Auth → SMTP Settings` 填入 Resend 的 SMTP 主機、埠、帳密
+4. 回到 `Authentication → Rate Limits` 調高寄信上限
 
 ## 13. 風險與緩解
 
@@ -658,7 +739,7 @@ forStudy/
 | **中文表格 OCR 準確率不佳** | 匯入結果需大量人工修正 | 可編輯表格為主要介面（OCR 只是省打字）；內建課表範本可一鍵載入；低信心欄位黃底標示；欄位黑名單過濾表頭雜訊 |
 | Tesseract 語言模型首次載入慢（10–20 MB） | 首次辨識等待時間長 | 動態 `import()`，僅在按下辨識時才載入；顯示下載與辨識雙階段進度；之後由瀏覽器快取 |
 | 截圖解析度過低導致 bbox 分群失準 | OCR 全盤失敗 | 分群採相對閾值；失敗時明確提示「請改用範本或手動輸入」，不假裝成功 |
-| 魔法連結信件延遲 | 首次登入受阻 | Supabase 內建 SMTP 對個人用量足夠；若遇延遲，設定頁與登入頁皆提供重新寄送 |
+| 寄信額度僅 2 封/小時 | 註冊或登入受阻 | 已關閉信箱驗證並改用密碼登入，日常登入不寄信；僅「忘記密碼」會用到。若真的卡住，可接自訂 SMTP（Resend 免費 3000 封/月），步驟寫進 README 備案 |
 | 每週排程與實際生活脫節 | 使用者放棄使用 | 未達標只是紅字提醒，不阻擋任何操作；可隨時改排程或封存事項 |
 
 ## 14. 已知限制
