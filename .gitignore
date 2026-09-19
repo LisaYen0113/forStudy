@@ -1,0 +1,33 @@
+# 依賴
+node_modules/
+
+# 建置產物
+dist/
+dist-ssr/
+*.local
+
+# 環境變數（含 Supabase 金鑰，絕不進版控）
+.env
+.env.local
+.env.*.local
+
+# 個人資料（真實課表內容，不得進入公開版控）
+# 真實課程範本請放 courseTemplate.local.ts，由 resolveCourseTemplate() 優先載入
+*.local.ts
+課表截圖.png
+*.截圖.png
+
+# 編輯器 / 作業系統
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 測試與日誌
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
